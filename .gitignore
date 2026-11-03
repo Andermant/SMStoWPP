@@ -1,0 +1,29 @@
+# Dependências do Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Sessão e autenticação do WhatsApp (Baileys)
+# CRÍTICO: Nunca envie essa pasta para o Git pois contém suas chaves de acesso!
+data/auth_info/
+auth_info/
+*.auth/
+
+# Estado de persistência local da Bridge (IDs de SMS processados)
+data/processed.json
+data/*.tmp
+*.tmp
+
+# Arquivos de logs do sistema/aplicação
+*.log
+logs/
+
+# Arquivos de configuração de ambiente / variáveis secretas
+.env
+.env.local
+.env.*.local
+
+# Arquivos temporários e de sistema
+.DS_Store
+Thumbs.db

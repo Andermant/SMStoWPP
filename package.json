@@ -1,0 +1,24 @@
+{
+  "name": "smstowpp",
+  "version": "1.0.0",
+  "description": "use o whatsapp por sms",
+  "main": "start.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Andermant/SMStoWPP.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Andermant/SMStoWPP/issues"
+  },
+  "homepage": "https://github.com/Andermant/SMStoWPP#readme",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "pino": "^10.4.0"
+  }
+}
