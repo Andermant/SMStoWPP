@@ -124,6 +124,8 @@ async function startWhatsApp() {
     for (const msg of messages) {
       if (!msg.message || msg.key.fromMe) continue;
 
+      console.log("[WhatsApp Debug] Mensagem crua recebida de:", msg.key.remoteJid);
+      
       const remoteJid = msg.key.remoteJid;
       if (!remoteJid.endsWith("@s.whatsapp.net")) continue;
 
@@ -154,7 +156,8 @@ async function handleSMSMessage(message) {
   const cleanSender = normalizeNumber(sender);
   const cleanAuthorized = normalizeNumber(CONFIG.authorizedNumber);
   
-  if (!cleanSender.endsWith(cleanAuthorized.slice(-8))) {
+  //compara o numero do sms recebido com o numero autorizado
+  if (!cleanSender.endsWith(cleanAuthorized.slice(-11))) {
     console.log(`[SMS Ignorado] Remetente não autorizado (${sender})`);
     return;
   }
