@@ -1,6 +1,6 @@
 const { execFile } = require("child_process");
 const { promisify } = require("util");
-const fs = require("fs"); // manipulação de arquivos e caminho de pastas
+const fs = require("fs"); 
 const path = require("path");
 const readline = require("readline");
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/baileys");
@@ -16,7 +16,7 @@ const CONFIG = {
   // Intervalo de consulta à caixa de entrada do SMS (milissegundos)
   pollInterval: 5000,
 
-  // Mapeamento de apelidos para os números de WhatsApp (com DDI e DDD)
+  // Mapeamento de apelidos para os números de telefone (a partir dos quais descobriremos os LIDs)
   contacts: {
     joao: "5511988888888",
     maria: "5511977777777"
@@ -24,13 +24,16 @@ const CONFIG = {
 };
 // ==================================================
 
-const DATA_DIR = path.join(__dirname, "data"); // guarda o caminho absoluto de uma pasta data
+const DATA_DIR = path.join(__dirname, "data"); 
 const STATE_FILE = path.join(DATA_DIR, "processed.json"); 
 
 let processed = new Set();
 let initialized = false;
 let polling = false;
 let sock = null;
+
+// Armazenará a relação de apelido para o LID correspondente (ex: { joao: "123456@lid" })
+let contactLids = {};
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
@@ -75,6 +78,32 @@ function getMessageId(message) {
   return [message.number, message.received || message.date, message.body].join("|");
 }
 
+// Função para varrer os contatos e mapear números para LIDs
+async function resolveContactLids() {
+  console.log("[WhatsApp] Iniciando varredura e mapeamento de LIDs dos contatos...");
+  contactLids = {};
+
+  for (const [alias, phoneNumber] of Object.entries(CONFIG.contacts)) {
+    try {
+      const cleanPhone = normalizeNumber(phoneNumber);
+      const pnJid = `${cleanPhone}@s.whatsapp.net`;
+      
+      // Descobre o LID usando o método nativo do Baileys
+      const lid = await sock.signalRepository.lidMapping.getLIDForPN(pnJid);
+
+      if (lid) {
+        contactLids[alias] = lid;
+        console.log(`[Mapeamento] Contato @${alias} (${cleanPhone}) -> LID: ${lid}`);
+      } else {
+        console.log(`[Mapeamento] Aviso: Nenhum LID encontrado para @${alias} (${cleanPhone}). O contato pode precisar de interagir antes.`);
+      }
+    } catch (err) {
+      console.error(`[Mapeamento] Erro ao buscar LID para @${alias}:`, err.message);
+    }
+  }
+  console.log("[WhatsApp] Mapeamento de LIDs concluído.");
+}
+
 // ================= WHATSAPP (BAILEYS) =================
 async function startWhatsApp() {
   const authPath = path.join(DATA_DIR, "auth_info");
@@ -103,7 +132,7 @@ async function startWhatsApp() {
     }, 4000);
   }
 
-  sock.ev.on("connection.update", (update) => {
+  sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update;
     
     if (connection === "close") {
@@ -112,6 +141,8 @@ async function startWhatsApp() {
       if (shouldReconnect) startWhatsApp();
     } else if (connection === "open") {
       console.log("[WhatsApp] Conectado com sucesso!");
+      // Executa a varredura e mapeamento de LIDs assim que a conexão abre
+      await resolveContactLids();
     }
   });
 
@@ -124,19 +155,24 @@ async function startWhatsApp() {
     for (const msg of messages) {
       if (!msg.message || msg.key.fromMe) continue;
 
-      console.log("[WhatsApp Debug] Mensagem crua recebida de:", msg.key.remoteJid);
-      
-      const remoteJid = msg.key.remoteJid;
-      if (!remoteJid.endsWith("@s.whatsapp.net")) continue;
+      const remoteJid = msg.key.remoteJid; // Pode vir como @lid ou @s.whatsapp.net
+      console.log("[WhatsApp Debug] Mensagem crua recebida de:", remoteJid);
 
-      const senderPhone = remoteJid.replace("@s.whatsapp.net", "");
       const messageBody = msg.message.conversation || msg.message.extendedTextMessage?.text;
-
       if (!messageBody) continue;
 
-      let contactAlias = Object.keys(CONFIG.contacts).find(
-        key => CONFIG.contacts[key] === senderPhone
+      // Verifica se o remoteJid recebido corresponde ao LID de algum contato mapeado
+      let contactAlias = Object.keys(contactLids).find(
+        key => contactLids[key] === remoteJid
       );
+
+      // Fallback: se não achar por LID direto, tenta ver se bate com o final do número caso venha tradicional
+      if (!contactAlias && remoteJid.endsWith("@s.whatsapp.net")) {
+        const senderPhone = remoteJid.replace("@s.whatsapp.net", "");
+        contactAlias = Object.keys(CONFIG.contacts).find(
+          key => CONFIG.contacts[key] === senderPhone
+        );
+      }
 
       if (contactAlias) {
         console.log(`[WhatsApp -> SMS] Mensagem de @${contactAlias}: ${messageBody}`);
@@ -156,7 +192,6 @@ async function handleSMSMessage(message) {
   const cleanSender = normalizeNumber(sender);
   const cleanAuthorized = normalizeNumber(CONFIG.authorizedNumber);
   
-  //compara o numero do sms recebido com o numero autorizado
   if (!cleanSender.endsWith(cleanAuthorized.slice(-11))) {
     console.log(`[SMS Ignorado] Remetente não autorizado (${sender})`);
     return;
@@ -180,10 +215,12 @@ async function handleSMSMessage(message) {
   if (match) {
     const alias = match[1].toLowerCase();
     const messageText = match[2];
-    const targetNumber = CONFIG.contacts[alias];
+    
+    // Busca o LID atribuído previamente ao contato
+    const targetLid = contactLids[alias];
 
-    if (!targetNumber) {
-      await sendSMS(sender, `Contato desconhecido: @${alias}`);
+    if (!targetLid) {
+      await sendSMS(sender, `Contato desconhecido ou sem LID mapeado: @${alias}`);
       return;
     }
 
@@ -193,10 +230,10 @@ async function handleSMSMessage(message) {
     }
 
     try {
-      const jid = `${targetNumber}@s.whatsapp.net`;
-      await sock.sendMessage(jid, { text: messageText });
+      // Envia diretamente usando o LID descoberto na varredura
+      await sock.sendMessage(targetLid, { text: messageText });
       
-      console.log(`[WhatsApp Enviado] Para @${alias}: ${messageText}`);
+      console.log(`[WhatsApp Enviado] Para @${alias} (LID: ${targetLid}): ${messageText}`);
       await sendSMS(sender, `[Enviado @${alias}] OK`);
     } catch (err) {
       console.error("Erro ao enviar pelo WhatsApp:", err);
@@ -251,7 +288,7 @@ function start() {
   loadState();
 
   console.log("==============================");
-  console.log("   SMS-WHATSAPP BRIDGE v2.0   ");
+  console.log("   SMS-WHATSAPP BRIDGE v2.1   ");
   console.log("==============================");
 
   startWhatsApp();
